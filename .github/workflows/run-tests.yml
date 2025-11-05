@@ -1,0 +1,97 @@
+name: Executar Testes .NET da Dog API
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout do código
+        uses: actions/checkout@v4
+
+      - name: 2. Configurar .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x' 
+
+      - name: 3. Instalar dependências
+        run: dotnet restore
+
+      - name: 4. Build do projeto
+        run: dotnet build --configuration Release --no-restore
+
+      - name: 5. Executar Testes
+        run: dotnet test --configuration Release --no-build --verbosity normal
+        continue-on-error: true
+        env:
+          ALLURE_RESULTS_DIRECTORY: ${{ github.workspace }}/allure-results
+
+      - name: 6. Verificar resultados do Allure
+        if: always()
+        run: |
+          echo "Procurando por resultados do Allure..."
+          echo "Workspace: ${{ github.workspace }}"
+          echo "Estrutura de diretórios:"
+          ls -la
+          echo "Procurando allure-results em todo o projeto:"
+          find . -name "allure-results" -type d -exec ls -la {} \;
+          echo "Procurando em bin/Release:"
+          find . -path "*/bin/Release/*" -name "allure-results" -type d -exec ls -la {} \;
+          echo "Conteúdo de bin (se existir):"
+          ls -laR bin/ || true
+
+      - name: 7. Copiar resultados do Allure para raiz
+        if: always()
+        run: |
+          mkdir -p allure-results
+          find . -path "*/bin/Release/*/allure-results/*" -type f -exec cp {} allure-results/ \; || true
+          find . -name "allure-results" -type d ! -path "*/bin/*" -exec cp -r {}/* allure-results/ \; || true
+          echo "Conteúdo de allure-results após cópia:"
+          ls -la allure-results/ || echo "Diretório vazio ou não existe"
+
+      - name: 8. Instalar Allure CLI
+        if: always()
+        run: |
+          sudo wget https://github.com/allure-framework/allure2/releases/download/2.24.1/allure-2.24.1.tgz
+          sudo tar -zxvf allure-2.24.1.tgz -C /opt/
+          sudo ln -s /opt/allure-2.24.1/bin/allure /usr/bin/allure
+          allure --version
+
+      - name: 8. Gerar Relatório Allure
+        if: always()
+        run: |
+          if [ -d "allure-results" ]; then
+            allure generate allure-results --clean -o allure-report
+          else
+            echo "AVISO: Diretório allure-results não encontrado. Pulando geração do relatório."
+            mkdir -p allure-report
+            echo "<html><body><h1>Nenhum resultado Allure encontrado</h1></body></html>" > allure-report/index.html
+          fi
+
+      - name: 9. Salvar Artefatos (Relatório Allure)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-report
+          path: allure-report/
+          if-no-files-found: warn
+      
+      - name: 10. Publicar Relatório no GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        if: github.ref == 'refs/heads/main' && always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
